@@ -27291,11 +27291,13 @@ class TaskParameters {
     _azurePipelineName;
     _azureDevopsToken;
     _azurePipelineVariables;
+    _azurePipelineParameters;
     constructor() {
         this._azureDevopsProjectUrl = coreExports.getInput('azure-devops-project-url', { required: true });
         this._azurePipelineName = coreExports.getInput('azure-pipeline-name', { required: true });
         this._azureDevopsToken = coreExports.getInput('azure-devops-token', { required: true });
         this._azurePipelineVariables = coreExports.getInput('azure-pipeline-variables', { required: false });
+        this._azurePipelineParameters = coreExports.getInput('azure-pipeline-parameters', { required: false });
     }
     static getTaskParams() {
         if (!this.taskparams) {
@@ -27314,6 +27316,9 @@ class TaskParameters {
     }
     get azurePipelineVariables() {
         return this._azurePipelineVariables;
+    }
+    get azurePipelineParameters() {
+        return this._azurePipelineParameters;
     }
 }
 
@@ -99120,58 +99125,59 @@ class PipelineRunner {
     async RunYamlPipeline(webApi) {
         const projectName = UrlParser.GetProjectName(this.taskParameters.azureDevopsProjectUrl);
         const pipelineName = this.taskParameters.azurePipelineName;
-        const buildApi = await webApi.getBuildApi();
-        // Get matching build definitions for the given project and pipeline name
-        const buildDefinitions = await buildApi.getDefinitions(projectName, pipelineName);
-        PipelineHelper.EnsureValidPipeline(projectName, pipelineName, buildDefinitions);
-        // Extract Id from build definition
-        const buildDefinitionReference = buildDefinitions[0];
-        const buildDefinitionId = buildDefinitionReference.id;
-        // Get build definition for the matching definition Id
-        const buildDefinition = await buildApi.getDefinition(projectName, buildDefinitionId);
-        Logger.LogPipelineObject(buildDefinition);
-        // Fetch repository details from build definition
-        const repositoryId = buildDefinition.repository.id.trim();
-        const repositoryType = buildDefinition.repository.type.trim();
-        let sourceBranch = null;
-        let sourceVersion = null;
-        // If definition is linked to existing github repo, pass github source branch and source version to build
-        if (PipelineHelper.equals(repositoryId, this.repository) && PipelineHelper.equals(repositoryType, this.githubRepo)) {
-            coreExports.debug("pipeline is linked to same Github repo");
-            sourceBranch = this.branch;
-            sourceVersion = this.commitId;
+        const pipelinesApi = await webApi.getPipelinesApi();
+        // Get all pipelines for the project and find by name
+        const pipelines = await pipelinesApi.listPipelines(projectName);
+        const pipeline = pipelines.find((x) => x.name === pipelineName);
+        if (!pipeline) {
+            throw new PipelineNotFoundError(`Pipeline named "${pipelineName}" not found in project "${projectName}"`);
         }
-        else {
-            coreExports.debug("pipeline is not linked to same Github repo");
-        }
-        const build = {
-            definition: {
-                id: buildDefinition.id
-            },
-            project: {
-                id: buildDefinition.project.id
-            },
-            sourceBranch: sourceBranch,
-            sourceVersion: sourceVersion,
-            reason: BuildInterfacesExports.BuildReason.Triggered,
-            parameters: this.taskParameters.azurePipelineVariables
-        };
-        Logger.LogPipelineTriggerInput(build);
-        // Queue build
-        const buildQueueResult = await buildApi.queueBuild(build, build.project.id, true);
-        if (buildQueueResult != null) {
-            Logger.LogPipelineTriggerOutput(buildQueueResult);
-            // If build result contains validation errors set result to FAILED
-            if (buildQueueResult.validationResults != null && buildQueueResult.validationResults.length > 0) {
-                const errorAndWarningMessage = PipelineHelper.getErrorAndWarningMessageFromBuildResult(buildQueueResult.validationResults);
-                coreExports.setFailed("Errors: " + errorAndWarningMessage.errorMessage + " Warnings: " + errorAndWarningMessage.warningMessage);
-            }
-            else {
-                Logger.LogPipelineTriggered(pipelineName, projectName);
-                if (buildQueueResult._links != null) {
-                    Logger.LogOutputUrl(buildQueueResult._links.web.href);
+        PipelineHelper.EnsureValidPipeline(projectName, pipelineName, [pipeline]);
+        Logger.LogPipelineObject(pipeline);
+        // Prepare run parameters
+        const runParameters = {
+            variables: undefined,
+            resources: {
+                repositories: {
+                    self: {
+                        refName: this.branch,
+                        version: this.commitId
+                    }
                 }
             }
+        };
+        // Set variables if provided
+        if (this.taskParameters.azurePipelineVariables) {
+            try {
+                const varsJson = JSON.parse(this.taskParameters.azurePipelineVariables);
+                // Convert to Pipeline API format: {key: {value: string}}
+                runParameters.variables = {};
+                Object.keys(varsJson).forEach(key => {
+                    runParameters.variables[key] = { value: varsJson[key] };
+                });
+            }
+            catch (e) {
+                const err = e instanceof Error ? e : new Error(String(e));
+                coreExports.warning("Failed to parse pipeline variables: " + err.message);
+            }
+        }
+        // Set template parameters if provided
+        if (this.taskParameters.azurePipelineParameters) {
+            try {
+                runParameters.templateParameters = JSON.parse(this.taskParameters.azurePipelineParameters);
+            }
+            catch (e) {
+                const err = e instanceof Error ? e : new Error(String(e));
+                coreExports.warning("Failed to parse pipeline template parameters: " + err.message);
+            }
+        }
+        Logger.LogPipelineTriggerInput(runParameters);
+        // Run pipeline
+        const runResult = await pipelinesApi.runPipeline(runParameters, projectName, pipeline.id);
+        Logger.LogPipelineTriggered(pipelineName, projectName);
+        Logger.LogPipelineTriggerOutput(runResult);
+        if (runResult._links && runResult._links.web) {
+            Logger.LogOutputUrl(runResult._links.web.href);
         }
     }
     async RunDesignerPipeline(webApi) {

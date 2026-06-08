@@ -6,63 +6,52 @@ import * as core from '@actions/core';
 import { PipelineNotFoundError } from '../src/pipeline.error';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let mockQueueBuildResult: any;
-const mockQueueBuild = jest.fn().mockImplementation(() => {
-    return mockQueueBuildResult;
-});
-
+var mockGetPersonalAccessTokenHandler: jest.Mock<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let mockBuildDefinition: any;
-const mockGetDefinition = jest.fn().mockImplementation(() => {
-    return mockBuildDefinition;
-});
-
+var mockListPipelines: jest.Mock<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let mockBuildDefinitions: any;
-const mockGetDefinitions = jest.fn().mockImplementation(() => {
-    return mockBuildDefinitions;
-});
-
-const mockGetBuildApi = jest.fn().mockImplementation(() => {
-    return {
-        getDefinitions: (projectName: string, pipelineName: string) => mockGetDefinitions(projectName, pipelineName),
-        getDefinition: (projectId: string, buildId: number) => mockGetDefinition(projectId, buildId),
-        queueBuild: (build: unknown, projectId: string, ignoreWarnings: boolean) => mockQueueBuild(build, projectId, ignoreWarnings)
-    }
-});
-
-const mockGetPersonalAccessTokenHandler = jest.fn().mockImplementation();
-
+var mockRunPipeline: jest.Mock<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let mockReleaseDefinitions: any;
-const mockGetReleaseDefinitions = jest.fn().mockImplementation(() => {
-    return mockReleaseDefinitions;
-});
-
+var mockGetPipelinesApi: jest.Mock<any>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let mockReleaseResponse: any;
-const mockCreateRelease = jest.fn().mockImplementation(() => {
-    return mockReleaseResponse;
-});
-
-const mockGetReleaseApi = jest.fn().mockImplementation(() => {
-    return {
-        getReleaseDefinitions: (project: string, searchText: string, artifactType: number) => mockGetReleaseDefinitions(project, searchText, artifactType),
-        createRelease: (releaseStartMetadata: unknown, project: string) => mockCreateRelease(releaseStartMetadata, project)
-    }
-});
+var mockGetReleaseDefinitions: jest.Mock<any>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+var mockCreateRelease: jest.Mock<any>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+var mockGetReleaseApi: jest.Mock<any>;
 
 jest.mock('azure-devops-node-api', () => {
+    mockGetPersonalAccessTokenHandler = jest.fn();
+    mockListPipelines = jest.fn();
+    mockRunPipeline = jest.fn();
+    mockGetPipelinesApi = jest.fn().mockImplementation(async () => ({
+        listPipelines: (...args: unknown[]) => mockListPipelines(...args),
+        runPipeline: (...args: unknown[]) => mockRunPipeline(...args)
+    }));
+    mockGetReleaseDefinitions = jest.fn();
+    mockCreateRelease = jest.fn();
+    mockGetReleaseApi = jest.fn().mockImplementation(async () => ({
+        getReleaseDefinitions: (...args: unknown[]) => mockGetReleaseDefinitions(...args),
+        createRelease: (...args: unknown[]) => mockCreateRelease(...args)
+    }));
+
     return {
-        getPersonalAccessTokenHandler: (token: string) => mockGetPersonalAccessTokenHandler(token),
-        WebApi: jest.fn().mockImplementation(() => {
-            return {
-                getBuildApi: async () => await mockGetBuildApi(),
-                getReleaseApi: async () => await mockGetReleaseApi(),
-            }
-        }) 
-    }
+        getPersonalAccessTokenHandler: (...args: unknown[]) => mockGetPersonalAccessTokenHandler(...args),
+        WebApi: jest.fn().mockImplementation(() => ({
+            getPipelinesApi: (...args: unknown[]) => mockGetPipelinesApi(...args),
+            getReleaseApi: (...args: unknown[]) => mockGetReleaseApi(...args),
+        }))
+    };
 });
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockPipelineList: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockRunPipelineResult: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockReleaseDefinitions: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockReleaseResponse: any;
 
 describe('Testing all functions of class PipelineHelper', () => {
     test('EnsureValidPipeline() - throw error if definition not found', () => {
@@ -171,149 +160,125 @@ describe('Testing all functions of class UrlParser', () => {
 import * as BuildInterfaces from 'azure-devops-node-api/interfaces/BuildInterfaces';
 
 describe('Testing all functions of class PipelineRunner', () => {
-    test('start() - regular run using env variables and inputs to trigger a run', async () => {
-        jest.spyOn(core, 'getInput').mockImplementation((input: string) => {
+    const setupCoreInputs = () => {
+        return jest.spyOn(core, 'getInput').mockImplementation(((input: string) => {
             process.env['GITHUB_REPOSITORY'] = 'repo_name';
             process.env['GITHUB_REF'] = 'releases';
             process.env['GITHUB_SHA'] = 'sampleSha';
 
-            if (input == 'azure-devops-project-url') return 'https://dev.azure.com/organization/my-project';
-            if (input == 'azure-pipeline-name') return 'my-pipeline';
-            if (input == 'azure-devops-token') return 'my-token';
+            if (input === 'azure-devops-project-url') return 'https://dev.azure.com/organization/my-project';
+            if (input === 'azure-pipeline-name') return 'my-pipeline';
+            if (input === 'azure-devops-token') return 'my-token';
+            if (input === 'azure-pipeline-variables') return '';
+            if (input === 'azure-pipeline-parameters') return '';
             return '';
-        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any);
+    };
+
+    beforeEach(() => {
+        mockPipelineList = [{ id: 5, name: 'my-pipeline' }];
+        mockRunPipelineResult = {
+            id: 101,
+            _links: { web: { href: 'linkToRun' } },
+            result: 'succeeded'
+        };
+
+        mockListPipelines.mockReset();
+        mockListPipelines.mockImplementation(() => mockPipelineList);
+
+        mockRunPipeline.mockReset();
+        mockRunPipeline.mockImplementation(() => mockRunPipelineResult);
+
+        mockGetPipelinesApi.mockReset();
+        mockGetPipelinesApi.mockImplementation(async () => ({
+            listPipelines: mockListPipelines,
+            runPipeline: mockRunPipeline
+        }));
+
+        mockGetPersonalAccessTokenHandler.mockReset();
+
+        mockReleaseDefinitions = undefined;
+        mockReleaseResponse = undefined;
+
+        mockGetReleaseDefinitions.mockReset();
+        mockGetReleaseDefinitions.mockImplementation(() => mockReleaseDefinitions);
+
+        mockCreateRelease.mockReset();
+        mockCreateRelease.mockImplementation(() => mockReleaseResponse);
+
+        mockGetReleaseApi.mockReset();
+        mockGetReleaseApi.mockImplementation(async () => ({
+            getReleaseDefinitions: mockGetReleaseDefinitions,
+            createRelease: mockCreateRelease
+        }));
+    });
+
+    afterEach(() => {
+        jest.restoreAllMocks();
+    });
+
+    test('start() triggers a pipeline run with repo context', async () => {
+        setupCoreInputs();
         jest.spyOn(core, 'debug').mockImplementation();
         jest.spyOn(core, 'info').mockImplementation();
-        mockBuildDefinitions = [{
-            id: 5
-        }];
-        mockBuildDefinition = {
-            id: 5,
-            repository: {
-                id: 'repo',
-                type: 'Devops'
-            },
-            project: {
-                id: 'my-project'
-            },
-        }
-        mockQueueBuildResult = {
-            _links: {
-                web: {
-                    href: 'linkToRun'
+
+        await expect(new PipelineRunner(TaskParameters.getTaskParams()).start()).resolves.toBeUndefined();
+
+        expect(mockGetPersonalAccessTokenHandler).toHaveBeenCalledWith('my-token');
+        expect(mockGetPipelinesApi).toHaveBeenCalled();
+        expect(mockListPipelines).toHaveBeenCalledWith('my-project');
+        expect(mockRunPipeline).toHaveBeenCalledWith(
+            expect.objectContaining({
+                resources: {
+                    repositories: {
+                        self: {
+                            refName: 'releases',
+                            version: 'sampleSha'
+                        }
+                    }
                 }
-            }
-        };
-
-        expect(await (new PipelineRunner(TaskParameters.getTaskParams())).start()).toBeUndefined();
-        expect(mockGetPersonalAccessTokenHandler).toHaveBeenCalledWith('my-token');
-        expect(mockGetBuildApi).toHaveBeenCalled();
-        expect(mockGetDefinitions).toHaveBeenCalledWith('my-project', 'my-pipeline');
-        expect(mockGetDefinition).toHaveBeenCalledWith('my-project', 5);
-        const expectedBuild = {
-            definition: {
-                id: 5,
-            },
-            project: {
-                id: 'my-project',
-            },
-            reason: 1967,
-            sourceBranch: null,
-            sourceVersion: null,
-            parameters: '',
-        }
-        expect(mockQueueBuild).toHaveBeenCalledWith(expectedBuild, 'my-project', true);
+            }),
+            'my-project',
+            5
+        );
     });
 
-    test('start() - set core failed in RunYamlPipeline if result has errors', async () => {
-        jest.spyOn(core, 'getInput').mockImplementation((input: string) => {
-            process.env['GITHUB_REPOSITORY'] = 'repo_name';
-            process.env['GITHUB_REF'] = 'releases';
-            process.env['GITHUB_SHA'] = 'sampleSha';
+    test('start() sets core.setFailed on pipeline run error', async () => {
+        setupCoreInputs();
+        jest.spyOn(core, 'debug').mockImplementation();
+        jest.spyOn(core, 'info').mockImplementation();
+        const setFailedSpy = jest.spyOn(core, 'setFailed').mockImplementation();
+        const runError = new Error('pipeline run failed');
+        mockRunPipeline.mockImplementation(() => { throw runError; });
 
-            if (input == 'azure-devops-project-url') return 'https://dev.azure.com/organization/my-project';
-            if (input == 'azure-pipeline-name') return 'my-pipeline';
-            if (input == 'azure-devops-token') return 'my-token';
-            return '';
-        });
+        await expect(new PipelineRunner(TaskParameters.getTaskParams()).start()).resolves.toBeUndefined();
+
+        expect(mockGetPipelinesApi).toHaveBeenCalled();
+        expect(mockRunPipeline).toHaveBeenCalled();
+        expect(setFailedSpy).toHaveBeenCalledWith(runError.message);
+    });
+
+    test('start() sets failed when pipeline not found by name', async () => {
+        setupCoreInputs();
+        jest.spyOn(core, 'debug').mockImplementation();
+        jest.spyOn(core, 'info').mockImplementation();
+        const setFailedSpy = jest.spyOn(core, 'setFailed').mockImplementation();
+        mockListPipelines.mockImplementation(() => [{ id: 1, name: 'other-pipeline' }]);
+        mockReleaseDefinitions = [];
+
+        await expect(new PipelineRunner(TaskParameters.getTaskParams()).start()).resolves.toBeUndefined();
+
+        expect(mockGetPipelinesApi).toHaveBeenCalled();
+        expect(setFailedSpy).toHaveBeenCalled();
+    });
+
+    test('start() triggers release pipeline when YAML pipeline not found', async () => {
+        setupCoreInputs();
         jest.spyOn(core, 'debug').mockImplementation();
         jest.spyOn(core, 'info').mockImplementation();
         jest.spyOn(core, 'setFailed').mockImplementation();
-        mockBuildDefinitions = [{
-            id: 5
-        }];
-        mockBuildDefinition = {
-            id: 5,
-            repository: {
-                id: 'repo_name',
-                type: 'Github'
-            },
-            project: {
-                id: 'my-project'
-            },
-        }
-        mockQueueBuildResult = {
-            validationResults: [{}]
-        };
-        expect(await (new PipelineRunner(TaskParameters.getTaskParams())).start()).toBeUndefined();
-        expect(mockGetPersonalAccessTokenHandler).toHaveBeenCalledWith('my-token');
-        expect(mockGetBuildApi).toHaveBeenCalled();
-        expect(mockGetDefinitions).toHaveBeenCalledWith('my-project', 'my-pipeline');
-        expect(mockGetDefinition).toHaveBeenCalledWith('my-project', 5);
-        const expectedBuild = {
-            definition: {
-                id: 5,
-            },
-            project: {
-                id: 'my-project',
-            },
-            reason: 1967,
-            sourceBranch: 'releases',
-            sourceVersion: 'sampleSha',
-            parameters: '',
-        }
-        expect(mockQueueBuild).toHaveBeenCalledWith(expectedBuild, 'my-project', true);
-        expect(core.setFailed).toHaveBeenCalled();
-    });
-
-    test('start() - set core failed in case of invalid response', async () => {
-        jest.spyOn(core, 'getInput').mockImplementation((input: string) => {
-            process.env['GITHUB_REPOSITORY'] = 'repo_name';
-            process.env['GITHUB_REF'] = 'releases';
-            process.env['GITHUB_SHA'] = 'sampleSha';
-
-            if (input == 'azure-devops-project-url') return 'https://dev.azure.com/organization/my-project';
-            if (input == 'azure-pipeline-name') return 'my-pipeline';
-            if (input == 'azure-devops-token') return 'my-token';
-            return '';
-        });
-        jest.spyOn(core, 'debug').mockImplementation();
-        jest.spyOn(core, 'info').mockImplementation();
-        jest.spyOn(core, 'setFailed').mockImplementation();
-        mockBuildDefinitions = [{}, {}];
-
-        expect(await (new PipelineRunner(TaskParameters.getTaskParams())).start()).toBeUndefined();
-        expect(mockGetPersonalAccessTokenHandler).toHaveBeenCalledWith('my-token');
-        expect(mockGetBuildApi).toHaveBeenCalled();
-        expect(mockGetDefinitions).toHaveBeenCalledWith('my-project', 'my-pipeline');
-        expect(core.setFailed).toHaveBeenCalled();
-    });
-
-    test('start() - trigger designer pipeline in case of PipelineNotFoundError', async () => {
-        jest.spyOn(core, 'getInput').mockImplementation((input: string) => {
-            process.env['GITHUB_REPOSITORY'] = 'repo_name';
-            process.env['GITHUB_REF'] = 'releases';
-            process.env['GITHUB_SHA'] = 'sampleSha';
-
-            if (input == 'azure-devops-project-url') return 'https://dev.azure.com/organization/my-project';
-            if (input == 'azure-pipeline-name') return 'my-pipeline';
-            if (input == 'azure-devops-token') return 'my-token';
-            return '';
-        });
-        jest.spyOn(core, 'debug').mockImplementation();
-        jest.spyOn(core, 'info').mockImplementation();
-        jest.spyOn(core, 'setFailed').mockImplementation();
-        mockBuildDefinitions = null;
+        mockListPipelines.mockImplementation(() => []);
         mockReleaseDefinitions = [{
             id: 5,
             artifacts: []
@@ -324,19 +289,21 @@ describe('Testing all functions of class PipelineRunner', () => {
                     href: 'linkToRun'
                 }
             }
-        }
+        };
 
-        expect(await (new PipelineRunner(TaskParameters.getTaskParams())).start()).toBeUndefined();
-        expect(mockGetPersonalAccessTokenHandler).toHaveBeenCalledWith('my-token');
-        expect(mockGetBuildApi).toHaveBeenCalled();
-        expect(mockGetDefinitions).toHaveBeenCalledWith('my-project', 'my-pipeline');
+        await expect(new PipelineRunner(TaskParameters.getTaskParams()).start()).resolves.toBeUndefined();
+
+        expect(mockGetPipelinesApi).toHaveBeenCalled();
+        expect(mockListPipelines).toHaveBeenCalledWith('my-project');
         expect(mockGetReleaseApi).toHaveBeenCalled();
         expect(mockGetReleaseDefinitions).toHaveBeenCalledWith('my-project', 'my-pipeline', 4);
-        const expectedRelease = {
-            artifacts: [], 
-            definitionId: 5, 
-            reason: 2
-        };
-        expect(mockCreateRelease).toHaveBeenCalledWith(expectedRelease, "my-project");
+        expect(mockCreateRelease).toHaveBeenCalledWith(
+            expect.objectContaining({
+                definitionId: 5,
+                artifacts: [],
+                reason: 2
+            }),
+            'my-project'
+        );
     });
-}); 
+});

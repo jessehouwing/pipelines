@@ -13,7 +13,7 @@
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-typescript": "^12.1.2",
     "@types/jest": "^30.0.0",
-    "@types/node": "^24.0.1",
+    "@types/node": "^25.9.2",
     "eslint": "^10.4.1",
     "jest": "^30.0.4",
     "rollup": "^4.41.1",
